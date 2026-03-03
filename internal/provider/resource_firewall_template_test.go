@@ -51,7 +51,7 @@ func newTestFirewallTemplateServer() *httptest.Server {
 			} else {
 				tmpl.FilterIPv6 = false
 			}
-			if r.FormValue("allowlist_hos") == "true" {
+			if r.FormValue("whitelist_hos") == "true" {
 				tmpl.AllowlistHOS = true
 			} else {
 				tmpl.AllowlistHOS = false
@@ -102,7 +102,7 @@ func newTestFirewallTemplateServer() *httptest.Server {
 			} else {
 				tmpl.FilterIPv6 = false
 			}
-			if r.FormValue("allowlist_hos") == "true" {
+			if r.FormValue("whitelist_hos") == "true" {
 				tmpl.AllowlistHOS = true
 			} else {
 				tmpl.AllowlistHOS = false

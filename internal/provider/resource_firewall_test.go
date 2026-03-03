@@ -48,7 +48,7 @@ func newTestFirewallServer() *httptest.Server {
 			if s := r.FormValue("status"); s != "" {
 				fw.Status = s
 			}
-			if a := r.FormValue("allowlist_hos"); a == "true" {
+			if a := r.FormValue("whitelist_hos"); a == "true" {
 				fw.AllowlistHOS = true
 			} else if a == "false" {
 				fw.AllowlistHOS = false

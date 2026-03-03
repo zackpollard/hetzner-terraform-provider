@@ -4,9 +4,11 @@
 package provider
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // --- Server resource tests ---
@@ -24,7 +26,6 @@ func TestAccServer_Rename(t *testing.T) {
 				Config: testAccServerConfig(serverNumber, "acc-test-server"),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("hetzner_server.test", "server_name", "acc-test-server"),
-					resource.TestCheckResourceAttrSet("hetzner_server.test", "server_ip"),
 					resource.TestCheckResourceAttrSet("hetzner_server.test", "product"),
 					resource.TestCheckResourceAttrSet("hetzner_server.test", "dc"),
 					resource.TestCheckResourceAttr("hetzner_server.test", "status", "ready"),
@@ -36,6 +37,13 @@ func TestAccServer_Rename(t *testing.T) {
 				ImportState:                          true,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "server_number",
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["hetzner_server.test"]
+					if !ok {
+						return "", fmt.Errorf("resource not found in state")
+					}
+					return rs.Primary.Attributes["server_number"], nil
+				},
 			},
 			// Update name.
 			{
@@ -61,7 +69,6 @@ func TestAccServer_DataSource(t *testing.T) {
 			{
 				Config: testAccServerDataSourceConfig(serverNumber),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet("data.hetzner_server.test", "server_ip"),
 					resource.TestCheckResourceAttrSet("data.hetzner_server.test", "product"),
 					resource.TestCheckResourceAttrSet("data.hetzner_server.test", "dc"),
 					resource.TestCheckResourceAttrSet("data.hetzner_server.test", "status"),
@@ -163,7 +170,6 @@ func TestAccBootRescue_ActivateDeactivate(t *testing.T) {
 					resource.TestCheckResourceAttr("hetzner_boot_rescue.test", "os", "linux"),
 					resource.TestCheckResourceAttr("hetzner_boot_rescue.test", "active", "true"),
 					resource.TestCheckResourceAttrSet("hetzner_boot_rescue.test", "password"),
-					resource.TestCheckResourceAttrSet("hetzner_boot_rescue.test", "server_ip"),
 				),
 			},
 			// Destroy will deactivate rescue.
@@ -182,7 +188,7 @@ func TestAccBootRescue_DataSource(t *testing.T) {
 			{
 				Config: testAccBootRescueDataSourceConfig(serverNumber),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttrSet("data.hetzner_boot_rescue.test", "server_ip"),
+					resource.TestCheckResourceAttrSet("data.hetzner_boot_rescue.test", "server_number"),
 				),
 			},
 		},

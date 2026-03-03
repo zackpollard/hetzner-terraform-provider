@@ -110,7 +110,7 @@ func (d *bootRescueDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		return
 	}
 
-	data.ServerIP = types.StringValue(apiResp.Rescue.ServerIP)
+	data.ServerIP = stringOrNull(apiResp.Rescue.ServerIP)
 	data.ServerIPv6Net = types.StringValue(apiResp.Rescue.ServerIPv6Net)
 	data.Active = types.BoolValue(apiResp.Rescue.Active)
 	data.Keyboard = types.StringValue(apiResp.Rescue.Keyboard)

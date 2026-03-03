@@ -162,7 +162,7 @@ func (r *bootRescueResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.Rescue.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.Rescue.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.Rescue.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.Rescue.Active)
 
@@ -195,7 +195,7 @@ func (r *bootRescueResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	state.ServerIP = types.StringValue(apiResp.Rescue.ServerIP)
+	state.ServerIP = stringOrNull(apiResp.Rescue.ServerIP)
 	state.ServerIPv6Net = types.StringValue(apiResp.Rescue.ServerIPv6Net)
 	state.Active = types.BoolValue(apiResp.Rescue.Active)
 
@@ -251,7 +251,7 @@ func (r *bootRescueResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.Rescue.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.Rescue.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.Rescue.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.Rescue.Active)
 

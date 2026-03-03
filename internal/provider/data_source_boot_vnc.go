@@ -110,7 +110,7 @@ func (d *bootVNCDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		return
 	}
 
-	data.ServerIP = types.StringValue(apiResp.VNC.ServerIP)
+	data.ServerIP = stringOrNull(apiResp.VNC.ServerIP)
 	data.ServerIPv6Net = types.StringValue(apiResp.VNC.ServerIPv6Net)
 	data.Active = types.BoolValue(apiResp.VNC.Active)
 

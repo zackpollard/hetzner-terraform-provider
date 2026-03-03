@@ -160,7 +160,7 @@ func (r *bootLinuxResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.Linux.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.Linux.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.Linux.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.Linux.Active)
 
@@ -193,7 +193,7 @@ func (r *bootLinuxResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	state.ServerIP = types.StringValue(apiResp.Linux.ServerIP)
+	state.ServerIP = stringOrNull(apiResp.Linux.ServerIP)
 	state.ServerIPv6Net = types.StringValue(apiResp.Linux.ServerIPv6Net)
 	state.Active = types.BoolValue(apiResp.Linux.Active)
 
@@ -249,7 +249,7 @@ func (r *bootLinuxResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.Linux.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.Linux.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.Linux.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.Linux.Active)
 

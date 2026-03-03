@@ -101,6 +101,12 @@ func (d *firewallTemplatesDataSource) Configure(ctx context.Context, req datasou
 func (d *firewallTemplatesDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	body, err := d.client.Get("/firewall/template")
 	if err != nil {
+		// Hetzner API returns 404 when there are no firewall templates.
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 404 {
+			data := firewallTemplatesDataSourceModel{Templates: []firewallTemplateDataSourceModel{}}
+			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+			return
+		}
 		resp.Diagnostics.AddError("Error listing firewall templates", err.Error())
 		return
 	}

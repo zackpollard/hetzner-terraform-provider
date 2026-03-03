@@ -126,6 +126,12 @@ func (d *ipsDataSource) Configure(ctx context.Context, req datasource.ConfigureR
 func (d *ipsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	body, err := d.client.Get("/ip")
 	if err != nil {
+		// Hetzner API returns 404 when there are no IPs.
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 404 {
+			data := ipsDataSourceModel{IPs: []ipItemModel{}}
+			resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+			return
+		}
 		resp.Diagnostics.AddError("Error listing IPs", err.Error())
 		return
 	}

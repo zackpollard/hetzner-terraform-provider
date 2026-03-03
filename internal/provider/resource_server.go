@@ -241,8 +241,8 @@ func (r *serverResource) readServer(data *serverResourceModel, diags *diag.Diagn
 	s := apiResp.Server
 	data.ServerNumber = types.Int64Value(int64(s.ServerNumber))
 	data.ServerName = types.StringValue(s.ServerName)
-	data.ServerIP = types.StringValue(s.ServerIP)
-	data.ServerIPv6 = types.StringValue(s.ServerIPv6)
+	data.ServerIP = stringOrNull(s.ServerIP)
+	data.ServerIPv6 = stringOrNull(s.ServerIPv6)
 	data.Product = types.StringValue(s.Product)
 	data.DC = types.StringValue(s.DC)
 	data.Traffic = types.StringValue(s.Traffic)

@@ -152,7 +152,7 @@ func (r *bootVNCResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.VNC.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.VNC.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.VNC.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.VNC.Active)
 
@@ -185,7 +185,7 @@ func (r *bootVNCResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	state.ServerIP = types.StringValue(apiResp.VNC.ServerIP)
+	state.ServerIP = stringOrNull(apiResp.VNC.ServerIP)
 	state.ServerIPv6Net = types.StringValue(apiResp.VNC.ServerIPv6Net)
 	state.Active = types.BoolValue(apiResp.VNC.Active)
 
@@ -236,7 +236,7 @@ func (r *bootVNCResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.VNC.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.VNC.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.VNC.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.VNC.Active)
 

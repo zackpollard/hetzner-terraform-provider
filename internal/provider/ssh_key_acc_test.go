@@ -4,17 +4,38 @@
 package provider
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"golang.org/x/crypto/ssh"
 )
+
+// testAccGenerateSSHKey generates a real ed25519 SSH public key for testing.
+func testAccGenerateSSHKey(t *testing.T, comment string) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate ed25519 key: %s", err)
+	}
+	_ = pem.Block{} // satisfy import if needed
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatalf("Failed to create SSH signer: %s", err)
+	}
+	pubKey := ssh.MarshalAuthorizedKey(signer.PublicKey())
+	// ssh.MarshalAuthorizedKey adds a trailing newline; trim it and add comment.
+	return fmt.Sprintf("%s %s", pubKey[:len(pubKey)-1], comment)
+}
 
 // TestAccSSHKey_CRUD tests full lifecycle: create, read, update name, import, and destroy.
 // SSH keys are free to create/delete, so this always runs with TF_ACC.
 func TestAccSSHKey_CRUD(t *testing.T) {
-	// Use a well-formed ed25519 test key.
-	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtest1234567890abcdefghijklmnopqrstuvwxyz acc-test"
+	pubKey := testAccGenerateSSHKey(t, "acc-test")
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -37,6 +58,13 @@ func TestAccSSHKey_CRUD(t *testing.T) {
 				ImportState:                          true,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "fingerprint",
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["hetzner_ssh_key.test"]
+					if !ok {
+						return "", fmt.Errorf("resource not found in state")
+					}
+					return rs.Primary.Attributes["fingerprint"], nil
+				},
 			},
 			// Update name.
 			{
@@ -51,7 +79,7 @@ func TestAccSSHKey_CRUD(t *testing.T) {
 
 // TestAccSSHKey_DataSources verifies the ssh_key and ssh_keys data sources.
 func TestAccSSHKey_DataSources(t *testing.T) {
-	pubKey := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtest1234567890abcdefghijklmnopqrstuvwxyz acc-ds-test"
+	pubKey := testAccGenerateSSHKey(t, "acc-ds-test")
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -66,7 +94,7 @@ data "hetzner_ssh_keys" "all" {
 `,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("hetzner_ssh_key.test", "name", "acc-ds-test-key"),
-					resource.TestCheckResourceAttrSet("data.hetzner_ssh_keys.all", "keys.#"),
+					resource.TestCheckResourceAttrSet("data.hetzner_ssh_keys.all", "ssh_keys.#"),
 				),
 			},
 		},
@@ -75,8 +103,8 @@ data "hetzner_ssh_keys" "all" {
 
 // TestAccSSHKey_ReplaceOnKeyChange verifies that changing the key data forces replacement.
 func TestAccSSHKey_ReplaceOnKeyChange(t *testing.T) {
-	pubKey1 := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtest1234567890abcdefghijklmnopqrstuvwxyz key1"
-	pubKey2 := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHabcdefghij1234567890klmnopqrstuvwxyzAB key2"
+	pubKey1 := testAccGenerateSSHKey(t, "key1")
+	pubKey2 := testAccGenerateSSHKey(t, "key2")
 
 	var fingerprint1 string
 

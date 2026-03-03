@@ -143,7 +143,7 @@ func (r *bootWindowsResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.Windows.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.Windows.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.Windows.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.Windows.Active)
 
@@ -176,7 +176,7 @@ func (r *bootWindowsResource) Read(ctx context.Context, req resource.ReadRequest
 		return
 	}
 
-	state.ServerIP = types.StringValue(apiResp.Windows.ServerIP)
+	state.ServerIP = stringOrNull(apiResp.Windows.ServerIP)
 	state.ServerIPv6Net = types.StringValue(apiResp.Windows.ServerIPv6Net)
 	state.Active = types.BoolValue(apiResp.Windows.Active)
 
@@ -223,7 +223,7 @@ func (r *bootWindowsResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	plan.ServerIP = types.StringValue(apiResp.Windows.ServerIP)
+	plan.ServerIP = stringOrNull(apiResp.Windows.ServerIP)
 	plan.ServerIPv6Net = types.StringValue(apiResp.Windows.ServerIPv6Net)
 	plan.Active = types.BoolValue(apiResp.Windows.Active)
 

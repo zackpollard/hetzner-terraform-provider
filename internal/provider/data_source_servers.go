@@ -148,8 +148,8 @@ func (d *serversDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		data.Servers = append(data.Servers, serverItemModel{
 			ServerNumber: types.Int64Value(int64(s.ServerNumber)),
 			ServerName:   types.StringValue(s.ServerName),
-			ServerIP:     types.StringValue(s.ServerIP),
-			ServerIPv6:   types.StringValue(s.ServerIPv6),
+			ServerIP:     stringOrNull(s.ServerIP),
+			ServerIPv6:   stringOrNull(s.ServerIPv6),
 			Product:      types.StringValue(s.Product),
 			DC:           types.StringValue(s.DC),
 			Traffic:      types.StringValue(s.Traffic),

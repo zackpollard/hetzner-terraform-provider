@@ -47,7 +47,7 @@ type firewallTemplateAPIModel struct {
 	ID           int64            `json:"id"`
 	Name         string           `json:"name"`
 	FilterIPv6   bool             `json:"filter_ipv6"`
-	AllowlistHOS bool             `json:"allowlist_hos"`
+	AllowlistHOS bool             `json:"whitelist_hos"`
 	IsDefault    bool             `json:"is_default"`
 	Rules        firewallAPIRules `json:"rules"`
 }
@@ -131,7 +131,7 @@ func (r *firewallTemplateResource) templateToForm(data *firewallTemplateResource
 		form.Set("filter_ipv6", strconv.FormatBool(data.FilterIPv6.ValueBool()))
 	}
 	if !data.AllowlistHOS.IsNull() && !data.AllowlistHOS.IsUnknown() {
-		form.Set("allowlist_hos", strconv.FormatBool(data.AllowlistHOS.ValueBool()))
+		form.Set("whitelist_hos", strconv.FormatBool(data.AllowlistHOS.ValueBool()))
 	}
 	if !data.IsDefault.IsNull() && !data.IsDefault.IsUnknown() {
 		form.Set("is_default", strconv.FormatBool(data.IsDefault.ValueBool()))
@@ -162,6 +162,10 @@ func (r *firewallTemplateResource) Create(ctx context.Context, req resource.Crea
 		return
 	}
 
+	// Save planned rules so we don't report API-added defaults as drift.
+	plannedInput := data.InputRules
+	plannedOutput := data.OutputRules
+
 	form := r.templateToForm(&data)
 
 	body, err := r.client.Post("/firewall/template", form)
@@ -177,6 +181,15 @@ func (r *firewallTemplateResource) Create(ctx context.Context, req resource.Crea
 	}
 
 	r.setStateFromAPI(&data, apiResp.FirewallTemplate)
+
+	// Preserve nil for rules not in config to avoid plan inconsistency.
+	if plannedInput == nil {
+		data.InputRules = nil
+	}
+	if plannedOutput == nil {
+		data.OutputRules = nil
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -214,6 +227,10 @@ func (r *firewallTemplateResource) Update(ctx context.Context, req resource.Upda
 		return
 	}
 
+	// Save planned rules.
+	plannedInput := data.InputRules
+	plannedOutput := data.OutputRules
+
 	var state firewallTemplateResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
@@ -235,6 +252,14 @@ func (r *firewallTemplateResource) Update(ctx context.Context, req resource.Upda
 	}
 
 	r.setStateFromAPI(&data, apiResp.FirewallTemplate)
+
+	// Preserve nil for rules not in config.
+	if plannedInput == nil {
+		data.InputRules = nil
+	}
+	if plannedOutput == nil {
+		data.OutputRules = nil
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 

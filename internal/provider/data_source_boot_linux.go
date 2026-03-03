@@ -110,7 +110,7 @@ func (d *bootLinuxDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	data.ServerIP = types.StringValue(apiResp.Linux.ServerIP)
+	data.ServerIP = stringOrNull(apiResp.Linux.ServerIP)
 	data.ServerIPv6Net = types.StringValue(apiResp.Linux.ServerIPv6Net)
 	data.Active = types.BoolValue(apiResp.Linux.Active)
 

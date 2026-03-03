@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -113,10 +114,10 @@ func (r *vSwitchServerResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 
-	// Read the vSwitch to get the server's connection status.
-	status, err := r.readServerStatus(data.VSwitchID.ValueInt64(), data.ServerNumber.ValueInt64())
+	// Wait for the vSwitch to finish processing and get the final status.
+	status, err := r.waitForReady(ctx, data.VSwitchID.ValueInt64(), data.ServerNumber.ValueInt64())
 	if err != nil {
-		resp.Diagnostics.AddError("Error reading vSwitch server status", err.Error())
+		resp.Diagnostics.AddError("Error waiting for vSwitch server status", err.Error())
 		return
 	}
 	data.Status = types.StringValue(status)
@@ -156,11 +157,27 @@ func (r *vSwitchServerResource) Delete(ctx context.Context, req resource.DeleteR
 	params := url.Values{}
 	params.Set("server", strconv.FormatInt(data.ServerNumber.ValueInt64(), 10))
 
-	_, err := r.client.DeleteWithBody(fmt.Sprintf("/vswitch/%d/server", data.VSwitchID.ValueInt64()), params)
-	if err != nil {
+	// Retry on VSWITCH_IN_PROCESS errors (the vSwitch API is async).
+	endpoint := fmt.Sprintf("/vswitch/%d/server", data.VSwitchID.ValueInt64())
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		_, err := r.client.DeleteWithBody(endpoint, params)
+		if err == nil {
+			return
+		}
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 409 {
+			select {
+			case <-ctx.Done():
+				resp.Diagnostics.AddError("Error removing server from vSwitch", ctx.Err().Error())
+				return
+			case <-time.After(10 * time.Second):
+				continue
+			}
+		}
 		resp.Diagnostics.AddError("Error removing server from vSwitch", err.Error())
 		return
 	}
+	resp.Diagnostics.AddError("Error removing server from vSwitch", "timed out waiting for vSwitch to be ready")
 }
 
 func (r *vSwitchServerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -185,6 +202,27 @@ func (r *vSwitchServerResource) ImportState(ctx context.Context, req resource.Im
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("vswitch_id"), vswitchID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("server_number"), serverNumber)...)
+}
+
+// waitForReady polls the vSwitch until the server's status is no longer "in process".
+// Returns the final status or an error if the timeout is exceeded.
+func (r *vSwitchServerResource) waitForReady(ctx context.Context, vswitchID, serverNumber int64) (string, error) {
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		status, err := r.readServerStatus(vswitchID, serverNumber)
+		if err != nil {
+			return "", err
+		}
+		if status != "in process" {
+			return status, nil
+		}
+		select {
+		case <-ctx.Done():
+			return status, ctx.Err()
+		case <-time.After(10 * time.Second):
+		}
+	}
+	return "in process", fmt.Errorf("timed out waiting for vSwitch %d server %d to be ready", vswitchID, serverNumber)
 }
 
 func (r *vSwitchServerResource) readServerStatus(vswitchID, serverNumber int64) (string, error) {

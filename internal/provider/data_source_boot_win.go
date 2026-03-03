@@ -110,7 +110,7 @@ func (d *bootWindowsDataSource) Read(ctx context.Context, req datasource.ReadReq
 		return
 	}
 
-	data.ServerIP = types.StringValue(apiResp.Windows.ServerIP)
+	data.ServerIP = stringOrNull(apiResp.Windows.ServerIP)
 	data.ServerIPv6Net = types.StringValue(apiResp.Windows.ServerIPv6Net)
 	data.Active = types.BoolValue(apiResp.Windows.Active)
 

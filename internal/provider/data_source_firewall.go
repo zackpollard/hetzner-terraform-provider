@@ -161,7 +161,7 @@ func (d *firewallDataSource) Read(ctx context.Context, req datasource.ReadReques
 
 	fw := apiResp.Firewall
 	data.ServerNumber = types.StringValue(fmt.Sprintf("%d", fw.ServerNumber))
-	data.ServerIP = types.StringValue(fw.ServerIP)
+	data.ServerIP = stringOrNull(fw.ServerIP)
 	data.Status = types.StringValue(fw.Status)
 	data.AllowlistHOS = types.BoolValue(fw.AllowlistHOS)
 	data.FilterIPv6 = types.BoolValue(fw.FilterIPv6)

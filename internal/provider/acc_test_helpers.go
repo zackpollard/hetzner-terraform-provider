@@ -6,12 +6,42 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/zack/terraform-provider-hetzner/internal/client"
 )
+
+// TestMain runs after all tests to clean up any auto-ordered servers.
+func TestMain(m *testing.M) {
+	code := m.Run()
+
+	// Cancel any auto-ordered server after all tests have finished.
+	if cachedServerNumber != "" {
+		username := os.Getenv("HETZNER_ROBOT_USERNAME")
+		password := os.Getenv("HETZNER_ROBOT_PASSWORD")
+		if username != "" && password != "" {
+			c := client.NewClient(username, password)
+			form := url.Values{}
+			form.Set("cancellation_date", "now")
+			fmt.Fprintf(os.Stderr, "Cancelling auto-ordered server %s\n", cachedServerNumber)
+			_, err := c.Post("/server/"+cachedServerNumber+"/cancellation", form)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to cancel server %s: %s\n", cachedServerNumber, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "Server %s cancelled successfully\n", cachedServerNumber)
+			}
+		}
+	}
+
+	os.Exit(code)
+}
 
 // --- Test API client ---
 
@@ -28,10 +58,88 @@ func testAccNewClient(t *testing.T) *client.Client {
 
 // --- Server helpers ---
 
-// testAccGetOrCreateServer returns a server number for testing. It uses
-// HETZNER_TEST_SERVER_NUMBER if set, otherwise if HETZNER_TEST_SERVER_CREATE=1
-// it orders the cheapest hourly server from the server market and registers
-// cleanup to cancel it when the test finishes. If neither is set, the test is skipped.
+// serverMarketProduct represents a server from the Hetzner server auction.
+type serverMarketProduct struct {
+	ID          int     `json:"id"`
+	Name        string  `json:"name"`
+	CPU         string  `json:"cpu"`
+	RAMSize     int     `json:"ram_size"`
+	HDDSize     int     `json:"hdd_size"`
+	Price       float64 `json:"price"`
+	HourlyPrice float64 `json:"hourly_price"`
+	Datacenter  string  `json:"datacenter"`
+	FixedPrice  bool    `json:"fixed_price"`
+}
+
+// testAccFindCheapestServer queries the public Hetzner server auction endpoint
+// and returns the product ID of the cheapest hourly-billed server.
+func testAccFindCheapestServer(t *testing.T) int {
+	t.Helper()
+
+	resp, err := http.Get("https://www.hetzner.com/_resources/app/data/app/live_data_sb_EUR.json")
+	if err != nil {
+		t.Fatalf("Error fetching server auction data: %s", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Error reading auction response: %s", err)
+	}
+
+	// The auction JSON wraps servers under a "server" key.
+	var wrapper struct {
+		Server []serverMarketProduct `json:"server"`
+	}
+	if err := json.Unmarshal(body, &wrapper); err != nil {
+		t.Fatalf("Error parsing auction data: %s", err)
+	}
+	products := wrapper.Server
+
+	// Filter to hourly-priced servers and sort by hourly price.
+	var hourly []serverMarketProduct
+	for _, p := range products {
+		if p.HourlyPrice > 0 {
+			hourly = append(hourly, p)
+		}
+	}
+	if len(hourly) == 0 {
+		t.Fatal("No hourly-billed servers available in the auction")
+	}
+
+	sort.Slice(hourly, func(i, j int) bool {
+		return hourly[i].HourlyPrice < hourly[j].HourlyPrice
+	})
+
+	cheapest := hourly[0]
+	t.Logf("Cheapest hourly server: ID=%d, %s, %dGB RAM, %dGB HDD, €%.4f/hr (€%.2f/mo), DC=%s",
+		cheapest.ID, cheapest.CPU, cheapest.RAMSize, cheapest.HDDSize,
+		cheapest.HourlyPrice, cheapest.Price, cheapest.Datacenter)
+
+	return cheapest.ID
+}
+
+// cachedServer caches an ordered server across all tests in a single test run
+// so that we don't order a new server for each test function.
+var (
+	cachedServerNumber string
+	cachedServerOnce   sync.Once
+	cachedServerErr    error
+)
+
+// testAccGetOrCreateServer returns a server number for testing.
+//
+// Resolution order:
+//  1. HETZNER_TEST_SERVER_NUMBER - use an existing persistent server (free per test run)
+//  2. HETZNER_TEST_SERVER_CREATE=1 - automatically find and order the cheapest hourly
+//     server from the Hetzner server auction. Override with
+//     HETZNER_TEST_SERVER_MARKET_PRODUCT_ID to pick a specific product.
+//     The server is automatically cancelled via t.Cleanup when the test finishes.
+//  3. Neither set - test is skipped.
+//
+// When HETZNER_TEST_SERVER_CREATE=1, the server is ordered once and shared
+// across all tests in the same test run. Each test registers a cleanup to
+// cancel it, but cancellation is idempotent.
 func testAccGetOrCreateServer(t *testing.T) string {
 	t.Helper()
 
@@ -43,53 +151,115 @@ func testAccGetOrCreateServer(t *testing.T) string {
 		t.Skip("HETZNER_TEST_SERVER_NUMBER or HETZNER_TEST_SERVER_CREATE=1 required; skipping server-dependent test")
 	}
 
+	cachedServerOnce.Do(func() {
+		cachedServerNumber, cachedServerErr = testAccOrderServer(t)
+	})
+
+	if cachedServerErr != nil {
+		t.Fatalf("Error ordering server: %s", cachedServerErr)
+	}
+
+	// Server is cancelled in TestMain after all tests finish.
+	return cachedServerNumber
+}
+
+// testAccOrderServer orders the cheapest hourly server from the auction
+// and waits for it to be ready. Returns the server number.
+func testAccOrderServer(t *testing.T) (string, error) {
+	t.Helper()
+
+	// Determine which product to order.
+	var productID string
+	if v := os.Getenv("HETZNER_TEST_SERVER_MARKET_PRODUCT_ID"); v != "" {
+		productID = v
+		t.Logf("Using specified server market product: %s", productID)
+	} else {
+		cheapestID := testAccFindCheapestServer(t)
+		productID = fmt.Sprintf("%d", cheapestID)
+	}
+
 	c := testAccNewClient(t)
 
-	// Find cheapest hourly market server.
-	body, err := c.Get("/order/server_market/product")
+	// Get the first available SSH key fingerprint for the order.
+	keysBody, err := c.Get("/key")
+	var keyFingerprint string
+	if err == nil {
+		var keys []struct {
+			Key struct {
+				Fingerprint string `json:"fingerprint"`
+			} `json:"key"`
+		}
+		if json.Unmarshal(keysBody, &keys) == nil && len(keys) > 0 {
+			keyFingerprint = keys[0].Key.Fingerprint
+		}
+	}
+	if keyFingerprint == "" {
+		return "", fmt.Errorf("no SSH keys found on the account; upload one before ordering a server")
+	}
+
+	// Order the server via the Robot API.
+	t.Logf("Ordering server market product %s via Robot API", productID)
+	form := url.Values{}
+	form.Set("product_id", productID)
+	form.Add("authorized_key[]", keyFingerprint)
+
+	body, err := c.Post("/order/server_market/transaction", form)
 	if err != nil {
-		t.Fatalf("Error listing server market products: %s", err)
+		return "", fmt.Errorf("error ordering server market product %s: %w", productID, err)
 	}
 
-	var products []struct {
-		Product struct {
-			ID    int    `json:"id"`
-			Name  string `json:"name"`
-			Price string `json:"price"`
-		} `json:"product"`
-	}
-	if err := json.Unmarshal(body, &products); err != nil {
-		t.Fatalf("Error parsing server market products: %s", err)
-	}
-	if len(products) == 0 {
-		t.Fatal("No server market products available")
-	}
-
-	// Order the first (cheapest) product.
-	productID := products[0].Product.ID
-	t.Logf("Ordering server market product %d (%s)", productID, products[0].Product.Name)
-
-	orderData := fmt.Sprintf("product_id=%d", productID)
-	body, err = c.Post("/order/server_market/transaction", nil)
-	if err != nil {
-		// Fallback: try with form data
-		t.Fatalf("Error ordering server (tried product_id=%d): %s\n%s", productID, err, orderData)
-	}
-
+	// Parse order response to get transaction ID and optionally the server number.
 	var orderResp struct {
 		Transaction struct {
-			ServerNumber int    `json:"server_number"`
+			ID           string `json:"id"`
+			ServerNumber *int   `json:"server_number"`
 			Status       string `json:"status"`
 		} `json:"transaction"`
 	}
 	if err := json.Unmarshal(body, &orderResp); err != nil {
-		t.Fatalf("Error parsing order response: %s", err)
+		return "", fmt.Errorf("error parsing order response: %w\nBody: %s", err, string(body))
 	}
 
-	serverNumber := fmt.Sprintf("%d", orderResp.Transaction.ServerNumber)
+	txnID := orderResp.Transaction.ID
+	t.Logf("Order transaction %s, status: %s", txnID, orderResp.Transaction.Status)
+
+	// Poll the transaction until server_number is assigned (may take a few minutes).
+	var serverNumber string
+	if orderResp.Transaction.ServerNumber != nil && *orderResp.Transaction.ServerNumber != 0 {
+		serverNumber = fmt.Sprintf("%d", *orderResp.Transaction.ServerNumber)
+	} else {
+		deadline := time.Now().Add(10 * time.Minute)
+		for time.Now().Before(deadline) {
+			time.Sleep(15 * time.Second)
+			txnBody, err := c.Get("/order/server_market/transaction/" + txnID)
+			if err != nil {
+				t.Logf("Polling transaction %s: %s", txnID, err)
+				continue
+			}
+			var txnResp struct {
+				Transaction struct {
+					ServerNumber *int   `json:"server_number"`
+					Status       string `json:"status"`
+				} `json:"transaction"`
+			}
+			if err := json.Unmarshal(txnBody, &txnResp); err != nil {
+				t.Logf("Error parsing transaction response: %s", err)
+				continue
+			}
+			t.Logf("Transaction %s status: %s, server_number: %v", txnID, txnResp.Transaction.Status, txnResp.Transaction.ServerNumber)
+			if txnResp.Transaction.ServerNumber != nil && *txnResp.Transaction.ServerNumber != 0 {
+				serverNumber = fmt.Sprintf("%d", *txnResp.Transaction.ServerNumber)
+				break
+			}
+		}
+		if serverNumber == "" {
+			return "", fmt.Errorf("timed out waiting for server_number from transaction %s", txnID)
+		}
+	}
+
 	t.Logf("Ordered server %s, waiting for it to be ready...", serverNumber)
 
-	// Poll until server is ready (up to 30 minutes).
+	// Poll until server is ready (up to 30 minutes for dedicated server provisioning).
 	deadline := time.Now().Add(30 * time.Minute)
 	for time.Now().Before(deadline) {
 		body, err := c.Get("/server/" + serverNumber)
@@ -106,25 +276,17 @@ func testAccGetOrCreateServer(t *testing.T) string {
 		}
 		if err := json.Unmarshal(body, &serverResp); err == nil && serverResp.Server.Status == "ready" {
 			t.Logf("Server %s is ready", serverNumber)
-			break
+			return serverNumber, nil
 		}
+		t.Logf("Server %s status: %s, waiting...", serverNumber, serverResp.Server.Status)
 		time.Sleep(30 * time.Second)
 	}
 
-	// Register cleanup to cancel the server.
-	t.Cleanup(func() {
-		t.Logf("Cancelling server %s", serverNumber)
-		c := testAccNewClient(t)
-		_, err := c.Post("/server/"+serverNumber+"/cancellation", nil)
-		if err != nil {
-			t.Logf("Warning: failed to cancel server %s: %s", serverNumber, err)
-		}
-	})
-
-	return serverNumber
+	return serverNumber, nil
 }
 
 // testAccServerIP queries the API to get a server's main IP address.
+// Skips the test if the server has no IPv4 address (e.g., IPv6-only servers).
 func testAccServerIP(t *testing.T, serverNumber string) string {
 	t.Helper()
 	c := testAccNewClient(t)
@@ -143,21 +305,12 @@ func testAccServerIP(t *testing.T, serverNumber string) string {
 		t.Fatalf("Error parsing server response: %s", err)
 	}
 	if resp.Server.ServerIP == "" {
-		t.Fatalf("Server %s has no IP address", serverNumber)
+		t.Skipf("Server %s has no IPv4 address (IPv6-only); skipping test that requires IPv4", serverNumber)
 	}
 	return resp.Server.ServerIP
 }
 
 // --- Environment variable gates ---
-
-func testAccServerNumber(t *testing.T) string {
-	t.Helper()
-	v := os.Getenv("HETZNER_TEST_SERVER_NUMBER")
-	if v == "" {
-		t.Skip("HETZNER_TEST_SERVER_NUMBER not set; skipping")
-	}
-	return v
-}
 
 func testAccStorageBoxID(t *testing.T) string {
 	t.Helper()
@@ -294,6 +447,11 @@ resource "hetzner_firewall_template" "test" {
     protocol   = "tcp"
     action     = "accept"
   }]
+
+  output = [{
+    name   = "Allow all"
+    action = "accept"
+  }]
 }
 `, name)
 }
@@ -318,6 +476,11 @@ resource "hetzner_firewall_template" "test" {
     dst_port   = "443"
     protocol   = "tcp"
     action     = "accept"
+  }]
+
+  output = [{
+    name   = "Allow all"
+    action = "accept"
   }]
 }
 `, name)
@@ -513,4 +676,47 @@ func testAccFailoversDataSourceConfig() string {
 data "hetzner_failovers" "test" {
 }
 `
+}
+
+func testAccBootLinuxConfig(serverNumber, dist, lang string) string {
+	return fmt.Sprintf(`
+resource "hetzner_boot_linux" "test" {
+  server_number = %s
+  dist          = %q
+  lang          = %q
+}
+`, serverNumber, dist, lang)
+}
+
+func testAccBootLinuxDataSourceConfig(serverNumber string) string {
+	return fmt.Sprintf(`
+data "hetzner_boot_linux" "test" {
+  server_number = %s
+}
+`, serverNumber)
+}
+
+func testAccBootVNCDataSourceConfig(serverNumber string) string {
+	return fmt.Sprintf(`
+data "hetzner_boot_vnc" "test" {
+  server_number = %s
+}
+`, serverNumber)
+}
+
+func testAccBootWindowsDataSourceConfig(serverNumber string) string {
+	return fmt.Sprintf(`
+data "hetzner_boot_windows" "test" {
+  server_number = %s
+}
+`, serverNumber)
+}
+
+func testAccVSwitchServerConfig(vswitchID, serverNumber string) string {
+	return fmt.Sprintf(`
+resource "hetzner_vswitch_server" "test" {
+  vswitch_id    = %s
+  server_number = %s
+}
+`, vswitchID, serverNumber)
 }

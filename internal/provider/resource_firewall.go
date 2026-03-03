@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -60,7 +61,7 @@ type firewallAPIModel struct {
 	ServerIP     string           `json:"server_ip"`
 	ServerNumber int64            `json:"server_number"`
 	Status       string           `json:"status"`
-	AllowlistHOS bool             `json:"allowlist_hos"`
+	AllowlistHOS bool             `json:"whitelist_hos"`
 	FilterIPv6   bool             `json:"filter_ipv6"`
 	Port         string           `json:"port"`
 	Rules        firewallAPIRules `json:"rules"`
@@ -96,41 +97,49 @@ var firewallRuleSchemaAttrs = map[string]schema.Attribute{
 		MarkdownDescription: "IP version: `ipv4`, `ipv6`, or empty for both.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"name": schema.StringAttribute{
 		MarkdownDescription: "Rule name.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"dst_ip": schema.StringAttribute{
 		MarkdownDescription: "Destination IP/subnet in CIDR notation.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"src_ip": schema.StringAttribute{
 		MarkdownDescription: "Source IP/subnet in CIDR notation.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"dst_port": schema.StringAttribute{
 		MarkdownDescription: "Destination port or range.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"src_port": schema.StringAttribute{
 		MarkdownDescription: "Source port or range.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"protocol": schema.StringAttribute{
 		MarkdownDescription: "Protocol: `tcp`, `udp`, `icmp`, etc.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"tcp_flags": schema.StringAttribute{
 		MarkdownDescription: "TCP flags.",
 		Optional:            true,
 		Computed:            true,
+		PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 	},
 	"action": schema.StringAttribute{
 		MarkdownDescription: "Action: `accept` or `discard`.",
@@ -152,6 +161,7 @@ func (r *firewallResource) Schema(ctx context.Context, req resource.SchemaReques
 			"server_ip": schema.StringAttribute{
 				MarkdownDescription: "Server main IP address.",
 				Computed:            true,
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"status": schema.StringAttribute{
 				MarkdownDescription: "Firewall status: `active` or `disabled`.",
@@ -172,6 +182,7 @@ func (r *firewallResource) Schema(ctx context.Context, req resource.SchemaReques
 			"port": schema.StringAttribute{
 				MarkdownDescription: "Switch port: `main` or `kvm`.",
 				Computed:            true,
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"input": schema.ListNestedAttribute{
 				MarkdownDescription: "Incoming traffic rules. Maximum 10 rules. Applied in order.",
@@ -235,6 +246,14 @@ func firewallRulesToForm(prefix string, rules []firewallRuleModel, form url.Valu
 	}
 }
 
+// stringOrNull returns a types.StringValue for non-empty strings, types.StringNull for empty.
+func stringOrNull(s string) types.String {
+	if s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(s)
+}
+
 func apiRulesToModel(apiRules []firewallAPIRule) []firewallRuleModel {
 	if len(apiRules) == 0 {
 		return nil
@@ -242,14 +261,14 @@ func apiRulesToModel(apiRules []firewallAPIRule) []firewallRuleModel {
 	rules := make([]firewallRuleModel, len(apiRules))
 	for i, r := range apiRules {
 		rules[i] = firewallRuleModel{
-			IPVersion: types.StringValue(r.IPVersion),
-			Name:      types.StringValue(r.Name),
-			DstIP:     types.StringValue(r.DstIP),
-			SrcIP:     types.StringValue(r.SrcIP),
-			DstPort:   types.StringValue(r.DstPort),
-			SrcPort:   types.StringValue(r.SrcPort),
-			Protocol:  types.StringValue(r.Protocol),
-			TCPFlags:  types.StringValue(r.TCPFlags),
+			IPVersion: stringOrNull(r.IPVersion),
+			Name:      stringOrNull(r.Name),
+			DstIP:     stringOrNull(r.DstIP),
+			SrcIP:     stringOrNull(r.SrcIP),
+			DstPort:   stringOrNull(r.DstPort),
+			SrcPort:   stringOrNull(r.SrcPort),
+			Protocol:  stringOrNull(r.Protocol),
+			TCPFlags:  stringOrNull(r.TCPFlags),
 			Action:    types.StringValue(r.Action),
 		}
 	}
@@ -258,7 +277,7 @@ func apiRulesToModel(apiRules []firewallAPIRule) []firewallRuleModel {
 
 func (r *firewallResource) setStateFromAPI(data *firewallResourceModel, fw firewallAPIModel) {
 	data.ServerNumber = types.StringValue(strconv.FormatInt(fw.ServerNumber, 10))
-	data.ServerIP = types.StringValue(fw.ServerIP)
+	data.ServerIP = stringOrNull(fw.ServerIP)
 	data.Status = types.StringValue(fw.Status)
 	data.AllowlistHOS = types.BoolValue(fw.AllowlistHOS)
 	data.FilterIPv6 = types.BoolValue(fw.FilterIPv6)
@@ -274,10 +293,14 @@ func (r *firewallResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
+	plannedInput := data.InputRules
+	plannedOutput := data.OutputRules
+	plannedStatus := data.Status
+
 	form := url.Values{}
 	form.Set("status", data.Status.ValueString())
 	if !data.AllowlistHOS.IsNull() && !data.AllowlistHOS.IsUnknown() {
-		form.Set("allowlist_hos", strconv.FormatBool(data.AllowlistHOS.ValueBool()))
+		form.Set("whitelist_hos", strconv.FormatBool(data.AllowlistHOS.ValueBool()))
 	}
 	if !data.FilterIPv6.IsNull() && !data.FilterIPv6.IsUnknown() {
 		form.Set("filter_ipv6", strconv.FormatBool(data.FilterIPv6.ValueBool()))
@@ -289,7 +312,7 @@ func (r *firewallResource) Create(ctx context.Context, req resource.CreateReques
 		firewallRulesToForm("output", data.OutputRules, form)
 	}
 
-	body, err := r.client.Post("/firewall/"+data.ServerNumber.ValueString(), form)
+	body, err := r.postWithRetry(ctx, "/firewall/"+data.ServerNumber.ValueString(), form)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating firewall", err.Error())
 		return
@@ -302,6 +325,17 @@ func (r *firewallResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	r.setStateFromAPI(&data, apiResp.Firewall)
+
+	// The API may return "in process" temporarily; use the planned status.
+	data.Status = plannedStatus
+
+	if plannedInput == nil {
+		data.InputRules = nil
+	}
+	if plannedOutput == nil {
+		data.OutputRules = nil
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -311,6 +345,10 @@ func (r *firewallResource) Read(ctx context.Context, req resource.ReadRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	previousStatus := data.Status
+	previousInput := data.InputRules
+	previousOutput := data.OutputRules
 
 	body, err := r.client.Get("/firewall/" + data.ServerNumber.ValueString())
 	if err != nil {
@@ -329,6 +367,26 @@ func (r *firewallResource) Read(ctx context.Context, req resource.ReadRequest, r
 	}
 
 	r.setStateFromAPI(&data, apiResp.Firewall)
+
+	// The API may return "in process" temporarily during transitions;
+	// preserve the previous state's status to avoid drift.
+	if apiResp.Firewall.Status == "in process" && !previousStatus.IsNull() {
+		data.Status = previousStatus
+	}
+
+	// Hetzner auto-manages output rules (Block mail ports, Allow all).
+	// If the prior state had nil rules (user didn't configure them),
+	// preserve nil to avoid drift. During import, previousStatus is null
+	// (only server_number is set), so we populate rules from the API.
+	if !previousStatus.IsNull() {
+		if previousInput == nil {
+			data.InputRules = nil
+		}
+		if previousOutput == nil {
+			data.OutputRules = nil
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -339,10 +397,14 @@ func (r *firewallResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
+	plannedInput := data.InputRules
+	plannedOutput := data.OutputRules
+	plannedStatus := data.Status
+
 	form := url.Values{}
 	form.Set("status", data.Status.ValueString())
 	if !data.AllowlistHOS.IsNull() && !data.AllowlistHOS.IsUnknown() {
-		form.Set("allowlist_hos", strconv.FormatBool(data.AllowlistHOS.ValueBool()))
+		form.Set("whitelist_hos", strconv.FormatBool(data.AllowlistHOS.ValueBool()))
 	}
 	if !data.FilterIPv6.IsNull() && !data.FilterIPv6.IsUnknown() {
 		form.Set("filter_ipv6", strconv.FormatBool(data.FilterIPv6.ValueBool()))
@@ -354,7 +416,7 @@ func (r *firewallResource) Update(ctx context.Context, req resource.UpdateReques
 		firewallRulesToForm("output", data.OutputRules, form)
 	}
 
-	body, err := r.client.Post("/firewall/"+data.ServerNumber.ValueString(), form)
+	body, err := r.postWithRetry(ctx, "/firewall/"+data.ServerNumber.ValueString(), form)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating firewall", err.Error())
 		return
@@ -367,6 +429,17 @@ func (r *firewallResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 
 	r.setStateFromAPI(&data, apiResp.Firewall)
+
+	// The API may return "in process" temporarily; use the planned status.
+	data.Status = plannedStatus
+
+	if plannedInput == nil {
+		data.InputRules = nil
+	}
+	if plannedOutput == nil {
+		data.OutputRules = nil
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
@@ -377,13 +450,47 @@ func (r *firewallResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	_, err := r.client.Delete("/firewall/" + data.ServerNumber.ValueString())
-	if err != nil {
-		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 404 {
-			return
+	serverNum := data.ServerNumber.ValueString()
+
+	// Hetzner firewalls are a property of the server and cannot be truly deleted.
+	// Best effort: disable the firewall and clear rules.
+	form := url.Values{}
+	form.Set("status", "disabled")
+	form.Set("whitelist_hos", "true")
+	// Use retry to handle FIREWALL_IN_PROCESS errors.
+	r.postWithRetry(ctx, "/firewall/"+serverNum, form)
+}
+
+// postWithRetry retries POST requests on FIREWALL_IN_PROCESS (409) errors.
+func (r *firewallResource) postWithRetry(ctx context.Context, path string, form url.Values) ([]byte, error) {
+	deadline := time.Now().Add(5 * time.Minute)
+	retries500 := 0
+	for time.Now().Before(deadline) {
+		body, err := r.client.Post(path, form)
+		if err == nil {
+			return body, nil
 		}
-		resp.Diagnostics.AddError("Error deleting firewall", err.Error())
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 409 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Second):
+				continue
+			}
+		}
+		// Retry transient 500 errors a few times.
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 500 && retries500 < 3 {
+			retries500++
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Second):
+				continue
+			}
+		}
+		return nil, err
 	}
+	return nil, fmt.Errorf("timed out waiting for firewall to be ready")
 }
 
 func (r *firewallResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
