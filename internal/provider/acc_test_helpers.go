@@ -228,7 +228,7 @@ func testAccOrderServer(t *testing.T) (string, error) {
 	if orderResp.Transaction.ServerNumber != nil && *orderResp.Transaction.ServerNumber != 0 {
 		serverNumber = fmt.Sprintf("%d", *orderResp.Transaction.ServerNumber)
 	} else {
-		deadline := time.Now().Add(10 * time.Minute)
+		deadline := time.Now().Add(20 * time.Minute)
 		for time.Now().Before(deadline) {
 			time.Sleep(15 * time.Second)
 			txnBody, err := c.Get("/order/server_market/transaction/" + txnID)
