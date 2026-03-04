@@ -125,8 +125,17 @@ func (r *failoverResource) Create(ctx context.Context, req resource.CreateReques
 
 	body, err := r.client.Post(fmt.Sprintf("/failover/%s", data.IP.ValueString()), params)
 	if err != nil {
-		resp.Diagnostics.AddError("Error setting failover routing", err.Error())
-		return
+		// If already routed to the target server, treat as success and read current state.
+		if apiErr, ok := err.(*client.APIError); ok && apiErr.StatusCode == 409 {
+			body, err = r.client.Get(fmt.Sprintf("/failover/%s", data.IP.ValueString()))
+			if err != nil {
+				resp.Diagnostics.AddError("Error reading failover after already-routed", err.Error())
+				return
+			}
+		} else {
+			resp.Diagnostics.AddError("Error setting failover routing", err.Error())
+			return
+		}
 	}
 
 	var apiResp failoverAPIResponse

@@ -14,8 +14,9 @@ import (
 // --- Server resource tests ---
 
 // TestAccServer_Rename tests renaming a server and importing it.
+// Uses an ephemeral server to avoid modifying the persistent test server.
 func TestAccServer_Rename(t *testing.T) {
-	serverNumber := testAccGetOrCreateServer(t)
+	serverNumber := testAccOrderEphemeralServer(t)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },

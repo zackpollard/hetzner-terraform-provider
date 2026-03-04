@@ -11,37 +11,18 @@ import (
 	"net/url"
 	"os"
 	"sort"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/zack/terraform-provider-hetzner/internal/client"
 )
 
-// TestMain runs after all tests to clean up any auto-ordered servers.
-func TestMain(m *testing.M) {
-	code := m.Run()
-
-	// Cancel any auto-ordered server after all tests have finished.
-	if cachedServerNumber != "" {
-		username := os.Getenv("HETZNER_ROBOT_USERNAME")
-		password := os.Getenv("HETZNER_ROBOT_PASSWORD")
-		if username != "" && password != "" {
-			c := client.NewClient(username, password)
-			form := url.Values{}
-			form.Set("cancellation_date", "now")
-			fmt.Fprintf(os.Stderr, "Cancelling auto-ordered server %s\n", cachedServerNumber)
-			_, err := c.Post("/server/"+cachedServerNumber+"/cancellation", form)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to cancel server %s: %s\n", cachedServerNumber, err)
-			} else {
-				fmt.Fprintf(os.Stderr, "Server %s cancelled successfully\n", cachedServerNumber)
-			}
-		}
-	}
-
-	os.Exit(code)
-}
+// Default persistent test server and failover IP.
+// These are long-lived resources kept on the account for acceptance tests.
+const (
+	defaultTestServerNumber = "2939328"
+	defaultTestFailoverIP   = "78.46.24.37"
+)
 
 // --- Test API client ---
 
@@ -130,48 +111,46 @@ func testAccFindCheapestServer(t *testing.T) int {
 	return cheapest.ID
 }
 
-// cachedServer caches an ordered server across all tests in a single test run
-// so that we don't order a new server for each test function.
-var (
-	cachedServerNumber string
-	cachedServerOnce   sync.Once
-	cachedServerErr    error
-)
-
-// testAccGetOrCreateServer returns a server number for testing.
-//
-// Resolution order:
-//  1. HETZNER_TEST_SERVER_NUMBER - use an existing persistent server (free per test run)
-//  2. HETZNER_TEST_SERVER_CREATE=1 - automatically find and order the cheapest hourly
-//     server from the Hetzner server auction. Override with
-//     HETZNER_TEST_SERVER_MARKET_PRODUCT_ID to pick a specific product.
-//     The server is automatically cancelled via t.Cleanup when the test finishes.
-//  3. Neither set - test is skipped.
-//
-// When HETZNER_TEST_SERVER_CREATE=1, the server is ordered once and shared
-// across all tests in the same test run. Each test registers a cleanup to
-// cancel it, but cancellation is idempotent.
+// testAccGetOrCreateServer returns the persistent test server number.
+// Uses HETZNER_TEST_SERVER_NUMBER env var, or defaults to the long-lived
+// test server (2939328) kept on the account for acceptance tests.
 func testAccGetOrCreateServer(t *testing.T) string {
 	t.Helper()
-
 	if v := os.Getenv("HETZNER_TEST_SERVER_NUMBER"); v != "" {
 		return v
 	}
+	return defaultTestServerNumber
+}
 
+// testAccOrderEphemeralServer orders a new server from the auction for tests
+// that need their own isolated server (e.g., server rename tests).
+// The server is automatically cancelled when the test finishes.
+// Requires HETZNER_TEST_SERVER_CREATE=1 to run.
+func testAccOrderEphemeralServer(t *testing.T) string {
+	t.Helper()
 	if os.Getenv("HETZNER_TEST_SERVER_CREATE") != "1" {
-		t.Skip("HETZNER_TEST_SERVER_NUMBER or HETZNER_TEST_SERVER_CREATE=1 required; skipping server-dependent test")
+		t.Skip("HETZNER_TEST_SERVER_CREATE=1 required; skipping server lifecycle test")
 	}
 
-	cachedServerOnce.Do(func() {
-		cachedServerNumber, cachedServerErr = testAccOrderServer(t)
+	serverNumber, err := testAccOrderServer(t)
+	if err != nil {
+		t.Fatalf("Error ordering ephemeral server: %s", err)
+	}
+
+	t.Cleanup(func() {
+		c := testAccNewClient(t)
+		form := url.Values{}
+		form.Set("cancellation_date", "now")
+		t.Logf("Cancelling ephemeral server %s", serverNumber)
+		_, err := c.Post("/server/"+serverNumber+"/cancellation", form)
+		if err != nil {
+			t.Logf("Warning: failed to cancel server %s: %s", serverNumber, err)
+		} else {
+			t.Logf("Server %s cancelled successfully", serverNumber)
+		}
 	})
 
-	if cachedServerErr != nil {
-		t.Fatalf("Error ordering server: %s", cachedServerErr)
-	}
-
-	// Server is cancelled in TestMain after all tests finish.
-	return cachedServerNumber
+	return serverNumber
 }
 
 // testAccOrderServer orders the cheapest hourly server from the auction
@@ -333,11 +312,10 @@ func testAccVSwitchCreateEnabled(t *testing.T) {
 
 func testAccFailoverIP(t *testing.T) string {
 	t.Helper()
-	v := os.Getenv("HETZNER_TEST_FAILOVER_IP")
-	if v == "" {
-		t.Skip("HETZNER_TEST_FAILOVER_IP not set; skipping")
+	if v := os.Getenv("HETZNER_TEST_FAILOVER_IP"); v != "" {
+		return v
 	}
-	return v
+	return defaultTestFailoverIP
 }
 
 // --- Terraform config templates ---

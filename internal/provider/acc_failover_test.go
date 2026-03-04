@@ -4,9 +4,11 @@
 package provider
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
 
 // TestAccFailover_DataSource reads failover IP details via data source.
@@ -74,6 +76,13 @@ func TestAccFailover_CRUD(t *testing.T) {
 				ImportState:                          true,
 				ImportStateVerify:                    true,
 				ImportStateVerifyIdentifierAttribute: "ip",
+				ImportStateIdFunc: func(s *terraform.State) (string, error) {
+					rs, ok := s.RootModule().Resources["hetzner_failover.test"]
+					if !ok {
+						return "", fmt.Errorf("resource not found in state")
+					}
+					return rs.Primary.Attributes["ip"], nil
+				},
 			},
 		},
 	})
